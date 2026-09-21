@@ -1,8 +1,11 @@
 """Voice I/O — OS-native TTS and push-to-talk ASR (FR-8.x).
 
-No wake-word and no always-on listening (FR-8.3): the ASR path only ever runs
-when the user explicitly presses a button. Absence of either subsystem never
-breaks text mode (FR-8.5/FR-8.6).
+TTS uses an OS-native mechanism (say/espeak/spd-say/PowerShell). ASR is
+push-to-talk ONLY (FR-8.3) and, being optional, requires the external
+`whisper`/`whisper.cpp` binary — the base install is otherwise standard
+library only. No wake-word and no always-on listening (FR-8.3): the ASR path
+only ever runs when the user explicitly presses a button. Absence of either
+subsystem never breaks text mode (FR-8.5/FR-8.6).
 """
 
 from __future__ import annotations

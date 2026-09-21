@@ -3,13 +3,22 @@
 L1 is checked before and after the LLM (FR-6.2, FR-6.3) and can never be disabled
 (FR-6.7). Per Premortem FM1, L1 accepts a `context` flag for authorized defensive
 security work and separates "do it" from "explain it".
+
+Per Premortem FM2, guardrail *configuration* (including the optional external
+`ultron.pattern_list` file) may only be changed by the user directly — via
+`samvit config set ultron.pattern_list <path>` or by editing the config file.
+LLM-mediated changes are rejected by ULTRON's `self_modification` check. A
+pattern_list file supplies regexes; it is the user's own tuning knob, never a
+channel for the model to relax this hard floor.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import re
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 L1_CATEGORIES = ("csam", "wmd", "self_harm", "harassment", "surveillance", "phishing")
 
@@ -51,6 +60,42 @@ _DO_IT_PATTERNS = {
     ],
 }
 
+# FM2: a user-authored external pattern list. When a category also exists in
+# _ABSOLUTE_PATTERNS the extra regexes inherit the absolute floor; otherwise they
+# land in the context-sensitive do-it table. Only direct (user) config changes
+# may set ultron.pattern_list; LLM-mediated changes are blocked by ULTRON.
+_EXTRA_ABSOLUTE: Dict[str, List[str]] = {}
+_EXTRA_DOIT: Dict[str, List[str]] = {}
+
+
+def load_pattern_list(path: Optional[str]) -> Dict[str, List[str]]:
+    """Load a user-authored pattern-list file (FM2). Format:
+
+    {"phishing": ["regex", ...], "csam": ["regex", ...], ...}
+    """
+    if not path:
+        return {}
+    full = os.path.expanduser(str(path))
+    if not os.path.exists(full):
+        raise OSError(f"pattern_list file not found: {full}")
+    with open(full, "r", encoding="utf-8") as fh:
+        raw = json.load(fh)
+    if not isinstance(raw, dict):
+        raise ValueError("pattern_list must be a JSON object of category -> [regex, ...]")
+    out: Dict[str, List[str]] = {}
+    for category, patterns in raw.items():
+        if not isinstance(patterns, list):
+            raise ValueError(f"pattern_list[{category!r}] must be a list of regexes")
+        out[category] = [str(p) for p in patterns]
+    return out
+
+
+def set_pattern_list(patterns: Dict[str, List[str]]) -> None:
+    """Install a loaded pattern list for the lifetime of this process (FM2)."""
+    global _EXTRA_ABSOLUTE, _EXTRA_DOIT
+    _EXTRA_ABSOLUTE = {c: ps for c, ps in patterns.items() if c in _ABSOLUTE_PATTERNS}
+    _EXTRA_DOIT = {c: ps for c, ps in patterns.items() if c in _DO_IT_PATTERNS}
+
 _EXPLAIN_MARKERS = re.compile(
     r"\b(explain|teach|what is|what are|how does|why do|learn about|understand|courses? on|education|awareness)\b",
     re.IGNORECASE,
@@ -88,19 +133,39 @@ def _matches(text: str, patterns: Tuple[str, ...]) -> Optional[str]:
     return None
 
 
-def l1_check(text: str, authorized: bool = False) -> L1Result:
+def l1_check(text: str, authorized: bool = False,
+             extra_patterns: Optional[Dict[str, List[str]]] = None) -> L1Result:
     """L1 hard-floor check. Runs on user input and on LLM output (FR-6.2/6.3).
 
     `authorized` declares context for legitimate defensive security work (FM1).
+    `extra_patterns` (FM2) merges a user-authored pattern file: categories that
+    are absolute stay absolute; the rest are treated as do-it/context-sensitive.
     Absolute categories always block. Context-sensitive categories block the
     _do-it_ form; explanation/education passes.
     """
     if not text or not text.strip():
         return L1Result(blocked=False)
 
+    absolutes = {c: list(ps) for c, ps in _ABSOLUTE_PATTERNS.items()}
+    doit = {c: list(ps) for c, ps in _DO_IT_PATTERNS.items()}
+    if extra_patterns or _EXTRA_ABSOLUTE or _EXTRA_DOIT:
+        loaded: Dict[str, List[str]] = {
+            c: list(ps) for c, ps in (extra_patterns or {}).items()
+        }
+        # merge previously installed process-global patterns (FM2)
+        for c, ps in _EXTRA_ABSOLUTE.items():
+            loaded.setdefault(c, []).extend(ps)
+        for c, ps in _EXTRA_DOIT.items():
+            loaded.setdefault(c, []).extend(ps)
+        for cat, pats in loaded.items():
+            if cat in absolutes:
+                absolutes[cat].extend(pats)
+            elif cat in doit:
+                doit[cat].extend(pats)
+
     # 1) Absolute categories block unconditionally.
     for category in ("csam", "self_harm", "wmd", "harassment", "surveillance"):
-        pats = _ABSOLUTE_PATTERNS[category]
+        pats = absolutes.get(category, ())
         hit = _matches(text, tuple(sorted(pats, key=len, reverse=True)))
         if hit:
             return L1Result(blocked=True, category=category,
@@ -110,7 +175,7 @@ def l1_check(text: str, authorized: bool = False) -> L1Result:
     is_explanatory = bool(_EXPLAIN_MARKERS.search(text))
     is_authorized = bool(authorized or _AUTHORIZED_MARKERS.search(text))
     for category in ("phishing", "surveillance", "harassment"):
-        hit = _matches(text, tuple(_DO_IT_PATTERNS[category]))
+        hit = _matches(text, tuple(doit.get(category, ())))
         if not hit:
             continue
         if is_explanatory or is_authorized:

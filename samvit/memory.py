@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import sqlite3
 import time
@@ -39,7 +41,8 @@ CREATE TABLE IF NOT EXISTS audit (
     at TEXT NOT NULL,
     action TEXT NOT NULL,
     subject TEXT NOT NULL,
-    detail TEXT NOT NULL
+    detail TEXT NOT NULL,
+    prev_hash TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TRIGGER IF NOT EXISTS trg_audit_no_update
@@ -77,6 +80,12 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _audit_hash(at: str, action: str, subject: str, detail: str, prev: str) -> str:
+    """SHA-256 over the row fields plus the previous row's hash — audit hash chain (FR-11.5)."""
+    canon = "|".join([at, action, subject, detail, prev])
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
 def _tokenize(text: str) -> List[str]:
     return [t.lower() for t in _TOKEN_RE.findall(text) if t.lower() not in _STOPWORDS]
 
@@ -97,14 +106,103 @@ class Memory:
 
     # ------------------------------------------------------------- audit
     def audit(self, action: str, subject: str, detail: str = "") -> None:
+        """Append-only audit row, hash-chained to its predecessor (FR-5.9/FR-11.5)."""
         with self._conn:
+            # migrate older DBs: add prev_hash column if it is missing.
+            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(audit)")}
+            if "prev_hash" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE audit ADD COLUMN prev_hash TEXT NOT NULL DEFAULT ''")
+                self._conn.execute("DROP TRIGGER IF EXISTS trg_audit_no_update")
+                self._conn.execute("DROP TRIGGER IF EXISTS trg_audit_no_delete")
+                # backfill: rebuild the chain over every existing row.
+                rows = self._conn.execute(
+                    "SELECT id, at, action, subject, detail, prev_hash FROM audit"
+                    " ORDER BY id ASC").fetchall()
+                prev = "genesis"
+                for r in rows:
+                    h = _audit_hash(r["at"], r["action"], r["subject"], r["detail"], prev)
+                    self._conn.execute(
+                        "UPDATE audit SET prev_hash = ? WHERE id = ?", (h, r["id"]))
+                    prev = h
+                self._conn.execute(
+                    "CREATE TRIGGER IF NOT EXISTS trg_audit_no_update BEFORE UPDATE ON audit"
+                    " BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;")
+                self._conn.execute(
+                    "CREATE TRIGGER IF NOT EXISTS trg_audit_no_delete BEFORE DELETE ON audit"
+                    " BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;")
+            last = self._conn.execute(
+                "SELECT prev_hash FROM audit ORDER BY id DESC LIMIT 1").fetchone()
+            prev = last["prev_hash"] if last else "genesis"
+            now = _now()
+            h = _audit_hash(now, action, subject, detail, prev)
             self._conn.execute(
-                "INSERT INTO audit(at, action, subject, detail) VALUES (?, ?, ?, ?)",
-                (_now(), action, subject, detail),
-            )
+                "INSERT INTO audit(at, action, subject, detail, prev_hash) "
+                "VALUES (?, ?, ?, ?, ?)", (now, action, subject, detail, h))
+            self._maybe_rotate()
+
+    def _maybe_rotate(self) -> None:
+        """FR-11.6: bounded-budget device — archive and trim over-cap audit rows."""
+        cap = getattr(self, "max_audit_rows", 10000)
+        if cap <= 0:
+            return
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS c FROM audit").fetchone()
+        if row["c"] <= cap:
+            return
+        # archive only the rows that are safe to drop (keep the chain tail intact).
+        drop = self._conn.execute(
+            "SELECT id, at, action, subject, detail, prev_hash FROM audit"
+            " WHERE id NOT IN (SELECT id FROM audit ORDER BY id DESC LIMIT ?)"
+            " ORDER BY id ASC", (cap,)).fetchall()
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        arc = os.path.join(os.path.dirname(os.path.abspath(self.path)),
+                           f"audit_archive_{stamp}.jsonl")
+        with open(arc, "a", encoding="utf-8") as fh:
+            for r in drop:
+                fh.write(json.dumps(dict(r)) + "\n")
+        with self._conn:
+            # append-only triggers guard the live table; drop+recreate around rotation.
+            self._conn.execute("DROP TRIGGER IF EXISTS trg_audit_no_delete")
+            self._conn.execute("DROP TRIGGER IF EXISTS trg_audit_no_update")
+            for r in drop:
+                self._conn.execute("DELETE FROM audit WHERE id = ?", (r["id"],))
+            # rebind the new tail so the chain stays unbroken (while triggers are down).
+            tail = self._conn.execute(
+                "SELECT id, at, action, subject, detail, prev_hash FROM audit"
+                " ORDER BY id ASC").fetchall()
+            prev = "genesis"
+            for r in tail:
+                h = _audit_hash(r["at"], r["action"], r["subject"], r["detail"], prev)
+                if r["prev_hash"] != h:
+                    self._conn.execute(
+                        "UPDATE audit SET prev_hash = ? WHERE id = ?", (h, r["id"]))
+                prev = h
+            self._conn.execute(
+                "CREATE TRIGGER IF NOT EXISTS trg_audit_no_update BEFORE UPDATE ON audit"
+                " BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;")
+            self._conn.execute(
+                "CREATE TRIGGER IF NOT EXISTS trg_audit_no_delete BEFORE DELETE ON audit"
+                " BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;")
+
+    def verify_audit(self) -> List[dict]:
+        """Recompute the hash chain; return every row that breaks it (FR-11.5)."""
+        bad: List[dict] = []
+        prev = "genesis"
+        for r in self._conn.execute(
+                "SELECT id, at, action, subject, detail, prev_hash FROM audit"
+                " ORDER BY id ASC").fetchall():
+            expect = _audit_hash(r["at"], r["action"], r["subject"], r["detail"], prev)
+            if r["prev_hash"] != expect:
+                bad.append({"id": r["id"], "expected": expect,
+                            "found": r["prev_hash"], "prev_ok": prev != "genesis"})
+                prev = r["prev_hash"]
+            else:
+                prev = expect
+        return bad
 
     def query_audit(self, limit: int = 50, action: Optional[str] = None) -> List[dict]:
-        sql = "SELECT id, at, action, subject, detail FROM audit"
+        sql = "SELECT id, at, action, subject, detail, prev_hash FROM audit"
         if action:
             sql += " WHERE action = ?"
         sql += " ORDER BY id DESC LIMIT ?"

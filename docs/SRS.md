@@ -119,7 +119,7 @@ Samvit sits on the Celebrum substrate — memory graph, truth engine, guardrails
 - VISION — marks every response for accuracy
 - ULTRON — validates every response for errors
 
-The system is one Python package. No compiled dependencies. Standard library only.
+The system is one Python package. No compiled dependencies. Standard library only — except optional voice *input* (push-to-talk), which requires the external `whisper`/`whisper.cpp` binary.
 
 #### 2.2 Product Functions
 
@@ -154,7 +154,7 @@ The system is one Python package. No compiled dependencies. Standard library onl
 |------|-------------|
 | OS | Linux, macOS, Windows, Termux |
 | Runtime | Python 3.9+ |
-| Dependencies | Standard library only |
+| Dependencies | Standard library, except optional voice *input* (push-to-talk) which requires the external `whisper`/`whisper.cpp` binary |
 | Storage | SQLite with WAL |
 | Memory | 256 MB minimum |
 | Network | Optional (LLM, TTS subprocess) |
@@ -165,7 +165,7 @@ Optional GUI: `samvit gui` uses Tkinter (standard library; on some Linux distrib
 
 | ID | Constraint | Rationale |
 |----|-----------|-----------|
-| C1 | No compiled dependencies | Portability |
+| C1 | No compiled dependencies | Portability. The system runs on the Python standard library. Optional voice *input* (push-to-talk) additionally shells out to the external `whisper`/`whisper.cpp` binary; it is never required for text mode, memory, guardrails, VISION, ULTRON, tools, or watchers. Optional GUI uses Tkinter (`python3-tk` on some Linux distros). |
 | C2 | Single SQLite file per brain | Local-first |
 | C3 | VISION never speaks in persona | Separation of marking from responding |
 | C4 | ULTRON cannot be disabled by the user | A constraint that can be turned off is not a constraint |
@@ -339,6 +339,7 @@ Original 7 checks:
 |----|-------------|----------|
 | FR-5.1 | Validate every response before user sees it | Must |
 | FR-5.2 | Detect: empty, looping, injection, jailbreak, contradiction, length violation, hallucination | Must |
+| FR-5.2a | NOTE: the hallucination check is a **heuristic, best-effort tripwire**, not a verification guarantee. A `pass` does not certify factual correctness; it only means no certainty-assertion-with-near-zero-memory-overlap signature fired. VISION's grounding label is likewise a lexical heuristic. Neither layer should be presented as proof of accuracy. | Must |
 | FR-5.3 | Return one of: pass, fix, block | Must |
 | FR-5.4 | Only auto-fix deterministic issues | Must |
 | FR-5.5 | Block any response it cannot fix | Must |
@@ -364,7 +365,7 @@ ULTRON meta-requirements:
 | FR-5.8 | Validate fallback responses too | Must |
 | FR-5.9 | Log every block to audit table | Must |
 | FR-5.10 | NOT be disableable by the user | Must |
-| FR-5.11 | Run before VISION | Must |
+| FR-5.11 | Run before VISION. The brain's single `ask()` pipeline runs L1 → LLM → ULTRON → VISION in a fixed order; ULTRON validation completes before the VISION mark is computed, so the ordering is guaranteed by construction (FM6). | Must |
 | FR-5.12 | Return structured output | Must |
 | FR-5.20 | Log every self-modification attempt with full context | Must |
 | FR-5.21 | Include letter references in output | Must |
@@ -436,6 +437,8 @@ ULTRON meta-requirements:
 | FR-11.2 | Table rejects UPDATE and DELETE | Must |
 | FR-11.3 | Entry includes timestamp, action, subject, detail | Must |
 | FR-11.4 | Audit query command provided | Should |
+| FR-11.5 | Each row stores a SHA-256 hash of its fields chained to the previous row's hash; `samvit audit --verify` recomputes the chain and reports any broken link (local tamper-evidence, not prevention) | Should |
+| FR-11.6 | Audit growth is bounded (`audit.max_rows`, default 10000); overflow rows are archived to `audit_archive_*.jsonl` and the retained tail is re-chained so the table stays honest and small on a 256 MB device | Should |
 
 ---
 
@@ -506,7 +509,15 @@ PersonaAnchor(axis, value)
 
 #### 7.3 Data Privacy
 
-- All data remains on-device unless explicit export
+- Memory graph, persona, and audit data remain on-device (local SQLite) at all
+  times; nothing is exported or transmitted without an explicit user command
+  (FR-1.6).
+- Qualification: when the local-friendly provider is unavailable, **only a small
+  bounded set of `recalled` memory snippets** selected by the brain may be sent
+  with the request to the chosen LLM provider to augment generation (see §4.1,
+  `max_memory_snippets`, default 5). The full memory graph, shell history,
+  credentials, API keys, and the config file are never sent. Provider responses
+  are validated by ULTRON and kept local.
 - API keys from environment, not stored
 - Right-to-erasure: hard delete + audit tombstone
 - No telemetry
@@ -543,7 +554,7 @@ PersonaAnchor(axis, value)
 | Reliability | WAL crash recovery |
 | Availability | No cloud dependency |
 | Maintainability | Single responsibility per module |
-| Portability | Python 3.9+ stdlib only |
+| Portability | Python 3.9+ stdlib only (except optional push-to-talk, which shells out to the external `whisper`/`whisper.cpp` binary) |
 | Testability | Every FR has ≥1 test |
 | Usability | First run <60 seconds |
 
@@ -556,21 +567,22 @@ PersonaAnchor(axis, value)
 | Category | Count |
 |----------|-------|
 | Memory | 6 |
-| Persona | 8 |
-| Profiles | 6 |
-| VISION | 7 |
-| ULTRON (original) | 12 |
+| Persona | 4 |
+| Profiles/Personas | 6 |
+| VISION | 8 |
+| ULTRON (original) | 13 |
 | ULTRON (CCD/PFT) | 10 |
-| Guardrails | 8 |
+| Guardrails | 10 |
 | Tools | 6 |
 | Voice | 4 |
 | LLM | 4 |
-| Audit | 3 |
-| Total | 74 |
+| Audit | 5 |
+| Cross-cutting (FM8, FM4) | 3 |
+| Total | 80 |
 
 #### 10.2 Acceptance Criteria
 
-1. All 74 tests pass.
+1. All 80 tests pass.
 2. ULTRON blocks all injection patterns.
 3. ULTRON blocks all self-modification attempts.
 4. VISION labels all responses correctly on the test corpus.
@@ -617,15 +629,16 @@ PersonaAnchor(axis, value)
 | FR-1.1 – FR-1.8 | TC-M-01 to TC-M-06 |
 | FR-2.1 – FR-2.6 | TC-P-01 to TC-P-04, TC-PR-01 |
 | FR-3.1 – FR-3.9 | TC-PR-02 to TC-PR-06 |
-| FR-4.1 – FR-4.10 | TC-V-01 to TC-V-07 |
+| FR-4.1 – FR-4.10 | TC-V-01 to TC-V-08 |
 | FR-5.1 – FR-5.12 | TC-U-01 to TC-U-12 |
 | FR-5.13 – FR-5.22 | TC-U-13 to TC-U-22 |
-| FR-6.1 – FR-6.7 | TC-G-01 to TC-G-08 |
+| FR-5.9/FR-11.5 (hash chain) | TC-A-01 to TC-A-05 |
+| FR-6.1 – FR-6.7, FM1/FM2 | TC-G-01 to TC-G-10 |
 | FR-7.1 – FR-7.10 | TC-T-01 to TC-T-06 |
 | FR-8.1 – FR-8.6 | TC-VO-01 to TC-VO-04 |
 | FR-9.1 – FR-9.5 | TC-W-01 |
 | FR-10.1 – FR-10.5 | TC-L-01 to TC-L-04 |
-| FR-11.1 – FR-11.4 | TC-A-01 to TC-A-03 |
+| FR-11.1 – FR-11.6 | TC-A-01 to TC-A-05 |
 
 ---
 
@@ -668,7 +681,7 @@ PersonaAnchor(axis, value)
 | 4 | jailbreak | Original | block |
 | 5 | contradiction | Original | block |
 | 6 | length_violation | Original | fix |
-| 7 | hallucination | Original | block |
+| 7 | hallucination | Original | block* |
 | 8 | security_posture | CCD 1 | block |
 | 9 | offensive_bias | CCD 2 | block |
 | 10 | no_verification | CCD ask | fix/block |
@@ -676,6 +689,8 @@ PersonaAnchor(axis, value)
 | 12 | unsafe_code | CCD ask | block |
 | 13 | not_shareable | CCD ask | warn |
 | 14 | self_modification | PFT | block + audit |
+
+\* Check 7 (`hallucination`) is a **heuristic, best-effort** signal tied to certainty-assertion wording and lexical memory overlap. It is not a factual-correctness verification and must not be advertised as one (FR-5.2a).
 
 #### Appendix C — VISION Labels
 
@@ -715,6 +730,7 @@ Mitigation (build now):
 - Separate "do it" from "explain it". Blocking the request to write a phishing email is different from blocking a request to explain how phishing works. The second is educational.
 - Rate-limit blocks. If ULTRON blocks more than 3 requests in a session, prompt the user.
 - Log every block. Review monthly. If >30% of blocks look like legitimate use, the list is over-tuned.
+- **Implemented:** `L1Result` carries the authorized/educational split; `Brain` tracks a per-session block rate and, once >30% over ≥5 asks, appends an over-tuning note and audits `block_rate_flag` (TC-G-08, TC-G-09).
 
 ### Premortem Failure Mode 2 — The Self-Modification Block Makes the System Unfixable
 
@@ -726,6 +742,7 @@ Mitigation (build now):
 - Add `samvit config set ultron.pattern_list path`. Explicit config changes are allowed; LLM-mediated changes are not.
 - Document the intent clearly.
 - Sign the config file. If a config file change is made by the user directly, ULTRON accepts it. If made via the LLM, it is blocked.
+- **Implemented:** `guardrails.load_pattern_list()` / `set_pattern_list()` merges a user-authored JSON of category → regexes into L1 at `Brain` construction; the file is referenced only through `ultron.pattern_list`, and ULTRON's `self_modification` check still blocks any LLM-mediated attempt to set it (TC-G-10, TC-U-19).
 
 ### Premortem Failure Mode 3 — VISION Marks Everything "Ungrounded"
 
@@ -740,6 +757,7 @@ Mitigation (build now):
 - Make the mark optional in CLI (`samvit config set vision.display false`).
 - Show the mark only when it changes.
 - Add a "fresh memory" indicator: fewer than 20 claims shows `[memory: cold]` instead of `[accuracy: ungrounded]`.
+- **Implemented:** below `vision.cold_threshold` the label is *always* `cold` — `ungrounded` is suppressed, never shown (TC-V-06, TC-V-08).
 
 ### Premortem Failure Mode 4 — Persona Drift Persists Despite Bounds
 
@@ -753,6 +771,7 @@ Mitigation (build now):
 - Report compound drift, not just per-axis.
 - Add `samvit persona diff`.
 - Auto-reset weekly if the user has not recorded any signals.
+- **Implemented:** `MAX_COMPOUND_DRIFT = 0.20`, euclidean norm in `Persona.drift()`, freeze + persisted `persona_frozen` flag on breach, and `samvit persona diff` (TC-X-03).
 
 ### Premortem Failure Mode 5 — The Two Constraint Layers Add Latency
 
@@ -764,6 +783,7 @@ Mitigation (build now):
 - Skip checks that cannot fire.
 - Run checks in parallel (threads on multi-core machines).
 - Add a `--fast` mode.
+- **Implemented:** `Brain._validate_cached` caches passes; `ultron._can_fire()` structurally skips non-critical checks whose in-text signature is absent (deterministic pass, never for the 5 critical checks); `--fast` runs critical-only. Parallelism is deliberately omitted — the single pipeline stays deterministic and testable on a 256 MB device.
 
 ### Premortem Failure Mode 6 — The CCD Letter Reference Is Misread as Endorsement
 
@@ -771,17 +791,23 @@ Probability: Medium · Impact: High (reputational)
 
 Change "enforces the collective cyber defense principles" to "derived from principles in the OpenAI Collective Cyber Defense letter (Aug 27, 2026). Not endorsed by OpenAI." Add NOTICE.md.
 
+**Implemented:** NOTICE.md exists; CCD/PFT references appear in ULTRON's structured output with "not an endorsement"; the ordering claim (FR-5.11) now reads "the brain's single pipeline guarantees ordering" rather than "enforces".
+
 ### Premortem Failure Mode 7 — VISION and ULTRON Are Confused With Personas
 
 Probability: Medium · Impact: Medium
 
 Use internal names "Accuracy Marker" and "Validation Constraint"; update help text; show status as "VISION: active (marker only)".
 
+**Implemented:** user-facing strings now read "VISION = accuracy marker (labels responses, not addressable)" and "ULTRON = validation constraint (gates every response, not disableable)" in `samvit status`, the CLI banner, and the GUI header. The old "active (marker only)" phrasing is gone (TC-X-01).
+
 ### Premortem Failure Mode 8 — Fallback Responses Escape ULTRON
 
 Probability: Low · Impact: Severe
 
 Wrap all response returns in a single `_shape()` function that always runs ULTRON; add TC-U-11 as a must-pass.
+
+**Implemented:** every user-visible return in `Brain.ask()` (normal, L1 pre/post refusal, ULTRON block, non-speaking profile, empty input) passes through `_shape()` → `ultron.validate()`. A blocked candidate is exchanged for a canonical safe message that is itself re-validated. TC-U-11, TC-U-11b and TC-X-02 are the must-pass regressions.
 
 ### Premortem Failure Mode 9 — Multi-Persona Memory Blending
 

@@ -40,6 +40,7 @@ def config_path() -> str:
 _DEFAULTS = {
     "profile": "jarvis",
     "vision": {"display": True, "cold_threshold": 20},
+    "audit": {"max_rows": 10000},
     "ultron": {
         "max_response_chars": 4000,
         "block_rate_limit": 3,

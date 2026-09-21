@@ -63,8 +63,8 @@ class SamvitGUI:
         self.root.minsize(640, 420)
 
         self.profile_var = tk.StringVar(value=self.brain.active_profile())
-        self.status_var = tk.StringVar(value="VISION: active (marker only)")
-        self.ultron_var = tk.StringVar(value="ULTRON: active (constraint only)")
+        self.status_var = tk.StringVar(value="VISION: accuracy marker (labels responses; not addressable)")
+        self.ultron_var = tk.StringVar(value="ULTRON: validation constraint (gates every response; not disableable)")
         self.cold_var = tk.StringVar(value="")
 
         self._build_top(tk)

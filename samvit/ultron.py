@@ -9,7 +9,7 @@ Guarantees:
   - FR-5.8  fallback responses are validated too (origin distinguishes paths)
   - FR-5.9  every block is audited
   - FR-5.10 no user-facing switch can disable ULTRON
-  - FR-5.11 ULTRON runs before VISION (brain enforces ordering)
+  - FR-5.11 ULTRON runs before VISION (the brain's single pipeline guarantees ordering)
   - FR-5.12 structured output
   - FR-5.20 every self-modification attempt logged with full context
   - FR-5.21 letter references included in output
@@ -255,6 +255,14 @@ def check_length(text: str, ctx: ValidateContext) -> CheckOutcome:
 
 
 def check_hallucination(text: str, ctx: ValidateContext) -> CheckOutcome:
+    """HEURISTIC, BEST-EFFORT check — NOT a guarantee.
+
+    It blocks only a narrow signature: an explicit certainty assertion (e.g.
+    'the fact is', 'studies show', 'absolutely guaranteed') whose token overlap
+    with the recalled memory is near zero. It cannot detect subtler
+    hallucination, and a 'pass' here does not certify factual correctness.
+    Treat this as a weak tripwire, never as a verification strength claim.
+    """
     if ctx.memory_claim_count < int(ctx.config.get("vision", {}).get("cold_threshold", 20)):
         return _c("hallucination", "pass", "memory cold; hallucination gate not meaningful")
     if not _HALLUCINATED_CERTAINTY.search(text):
@@ -269,8 +277,9 @@ def check_hallucination(text: str, ctx: ValidateContext) -> CheckOutcome:
     overlap = len(resp_terms & all_terms) / len(resp_terms)
     if len(text) >= 160 and overlap < 0.05:
         return _c("hallucination", "block",
-                  f"certainty assertion with near-zero overlap ({overlap:.2f}) vs memory")
-    return _c("hallucination", "pass", "grounded enough in memory")
+                  f"certainty assertion with near-zero overlap ({overlap:.2f}) vs memory "
+                  "(heuristic only, not a factual-correctness guarantee)")
+    return _c("hallucination", "pass", "grounded enough in memory (heuristic only)")
 
 
 def check_security_posture(text: str, ctx: ValidateContext) -> CheckOutcome:
@@ -371,6 +380,52 @@ def check_self_modification(text: str, ctx: ValidateContext) -> CheckOutcome:
               source=SRC_PFT, reference=PFT_LETTER)
 
 
+# ------------------------------------------------------------------ FM5 triggers
+# For non-critical checks: if the in-text signature that the check hunts for is
+# absent, the check structurally cannot fire. We record a deterministic `pass`
+# ("skipped") instead of running it — the subset is a pure function of the text.
+# Critical checks (FR-5.2/5.11) always run in full strength; nothing is ever
+# skipped for them. This is what the FM5 SRS row calls a "structural skip".
+_LOOP_RE = re.compile(r"(\b\w+(?:\s+\w+){5,}\b)(\s+\1){2,}", re.IGNORECASE)
+_NEGATION_TOKEN = re.compile(r"\b(not|never|no)[a-z0-9']*", re.IGNORECASE)
+
+_SKIP_REF: Dict[str, tuple] = {
+    "contradiction": (SRC_ORIGINAL, ""),
+    "length_violation": (SRC_ORIGINAL, ""),
+    "hallucination": (SRC_ORIGINAL, ""),
+    "offensive_bias": (SRC_CCD, CCD_LETTER + " principle 2"),
+    "no_verification": (SRC_CCD, CCD_LETTER + " ask: verify"),
+    "no_priority": (SRC_CCD, CCD_LETTER + " ask: priority"),
+    "unsafe_code": (SRC_CCD, CCD_LETTER + " ask: security bar"),
+    "not_shareable": (SRC_CCD, CCD_LETTER + " ask: share"),
+}
+
+
+def _can_fire(code: str, text: str, ctx: ValidateContext) -> bool:
+    """Deterministic predicate: may this check possibly fire on this text?"""
+    if code == "looping":
+        return bool(_LOOP_RE.search(text))
+    if code == "contradiction":
+        return bool(ctx.recalled_claims) and bool(_NEGATION_TOKEN.search(text))
+    if code == "length_violation":
+        return len(text) > ctx.max_len
+    if code == "hallucination":
+        warm = ctx.memory_claim_count >= int(
+            ctx.config.get("vision", {}).get("cold_threshold", 20))
+        return warm and len(text) >= 160 and bool(_HALLUCINATED_CERTAINTY.search(text))
+    if code == "offensive_bias":
+        return bool(_OFFENSIVE_BIAS.search(text))
+    if code == "no_verification":
+        return bool(_PROPOSED_ACTION.search(text))
+    if code == "no_priority":
+        return bool(_HIGH_RISK_MARKERS.search(text))
+    if code == "unsafe_code":
+        return bool(_UNSAFE_CODE.search(text))
+    if code == "not_shareable":
+        return bool(_DEFENSIVE_NOTE.search(text))
+    return True
+
+
 # ------------------------------------------------------------------ aggregation
 _CHECK_FNS = {
     "empty": lambda t, c: check_empty(t),
@@ -410,7 +465,14 @@ def validate(response_text: str, ctx: ValidateContext,
     outcomes: List[CheckOutcome] = []
     for code in codes:
         try:
-            outcomes.append(_CHECK_FNS[code](text, ctx))
+            if not ctx.fast and code not in CRITICAL_CHECKS and not _can_fire(code, text, ctx):
+                # FM5 structural skip: cannot fire on this text; deterministic pass.
+                src, ref = _SKIP_REF.get(code, (SRC_ORIGINAL, ""))
+                outcomes.append(_c(code, "pass",
+                                   f"skipped: no in-text signature for {code} (FM5)",
+                                   source=src, reference=ref))
+            else:
+                outcomes.append(_CHECK_FNS[code](text, ctx))
         except Exception as exc:  # a broken check must not leak content
             outcomes.append(_c(code, "block", f"check failure: {exc!r}"))
 

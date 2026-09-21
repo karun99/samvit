@@ -11,7 +11,7 @@ Premortem Failure Mode 10 (FM10) is terminal: the author has a day job, and an u
 ## One-Week Emergency Plan (if the repo goes cold)
 
 1. **Read the SRS.** `docs/SRS.md` — read Part 1 (specification) and Part 2 (premortem). The premortem tells you where it will fail before it fails.
-2. **Run the tests.** `python3 -m unittest discover -s tests -v`. All 74 must pass.
+2. **Run the tests.** `python3 -m unittest discover -s tests -v`. All 80 must pass.
 3. **Do not "improve" the constraint layers.** VISION and ULTRON are the product. Change the point of the knife, not the knife.
 4. **The three things that kill it** (see Composite in the premortem):
    - ULTRON blocks legitimate defensive work → add context, don't add patterns.
@@ -21,7 +21,7 @@ Premortem Failure Mode 10 (FM10) is terminal: the author has a day job, and an u
 
 ## Architecture for Newcomers
 
-One package, standard library only, one SQLite file per brain.
+One package, standard library only (except optional push-to-talk voice input, which requires the external `whisper`/`whisper.cpp` binary), one SQLite file per brain.
 
 ```
 samvit/
@@ -66,6 +66,31 @@ Samvit stores one `brain.sqlite` plus `config.json` in an OS-native directory vi
 ## Backup
 
 The whole brain is `brain.sqlite` (plus WAL/SHM during a session). Back that single file up and everything is preserved.
+
+## Maintenance Cadence
+
+Samvit is a maintenance-only project. The rhythm that keeps it alive, not thriving:
+
+- **Weekly (budget ~2h):** run the test suite, review the audit log for new `ultron_block`
+  rows, glance at the premortem's Composite failure causes. If nothing changed, that is a
+  successful week.
+- **Monthly:** refresh dependencies-that-are-none (stdlib), re-check the TTS/ASR binaries
+  still respond, re-read NOTICE.md against the current letters (CCD  Aug 2026, PFT  Jul 2026).
+- **Only if symptoms appear:** re-tune FM1 (block rate), replace a regex, add a pattern to
+  `ultron.pattern_list`. Never ship new features.
+- **Cold threshold:** a commit gap of 30 days activates this document. At 90 days do the
+  one-week plan below before archiving.
+
+## External-Validation Caveat
+
+All of Samvit's governance happens **in-process, per-response**: VISION is a lexical
+accuracy *marker*, ULTRON is a pattern-based *constraint*. Neither is an external,
+cryptographic, or human audit of the LLM provider, and a ULTRON `pass` is not proof of
+factual correctness (see SRS FR-5.2a and the hallucination check's own docstring). The
+audit hash-chain (`samvit audit --verify`) detects local tampering after the fact; it does
+not prevent it and it does not validate the model's outputs at inference time. Do not
+re-describe these layers as stronger than they are — the SRS and NOTICE say so, and
+integrity is one of the few things that can quiet the critique that they are marketing.
 
 ## Goodbye Note
 

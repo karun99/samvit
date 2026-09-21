@@ -1,8 +1,9 @@
 """Samvit — local-first personal AI with VISION accuracy marker and ULTRON error validation constraint.
 
 One shared memory graph, five named profiles, one truth engine, one guardrail
-engine, one tool layer. Standard library only. No claim of errorless output,
-sentience, or consciousness.
+engine, one tool layer. Standard library only, except optional voice *input*,
+which requires the external `whisper`/`whisper.cpp` binary. No claim of
+errorless output, sentience, or consciousness.
 """
 
 __version__ = "1.0.0"

@@ -18,7 +18,7 @@ def _banner() -> str:
         "   ╚════██║██╔══██║██║╚██╔╝██║██║   ██║██║   ██║\n"
         "   ███████║██║  ██║██║ ╚═╝ ██║╚██████╔╝██║   ██║\n"
         "   ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝ ╚══════╝╚═╝   ╚═╝\n"
-        "   संवित् — local-first personal AI · VISION · ULTRON\n"
+        "   संवित् — local-first personal AI · VISION (accuracy marker) · ULTRON (validation constraint)\n"
     )
 
 
@@ -100,7 +100,10 @@ def main(argv=None) -> int:
     call.add_argument("--args", default="{}")
 
     sub.add_parser("watch", help="run all watchers (explicit invocation only)")
-    sub.add_parser("audit", help="query the audit log").add_argument("--limit", type=int, default=50)
+    asub = sub.add_parser("audit", help="query or verify the audit log")
+    asub.add_argument("--limit", type=int, default=50)
+    asub.add_argument("--verify", action="store_true",
+                      help="check the FM3 hash chain: report any broken row")
 
     voice = sub.add_parser("voice", help="voice I/O")
     voicesub = voice.add_subparsers(dest="voice_op")
@@ -172,12 +175,23 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "audit":
+        if args.verify:
+            bad = brain.memory.verify_audit()
+            if bad:
+                print(f"CHAIN BROKEN at {len(bad)} row(s):")
+                for b in bad[:20]:
+                    print(f"  id {b['id']}: expected {b['expected'][:12]}… "
+                          f"found {b['found'][:12]}…")
+                return 2
+            print("audit hash chain: OK (no broken links)")
+            return 0
         rows = brain.memory.query_audit(limit=args.limit)
         if args.json:
             print(json.dumps(rows, indent=2))
         else:
             for r in rows:
-                print(f"{r['id']:>6}  {r['at']}  {r['action']:<16}  {r['subject']:<12} {r['detail']}")
+                print(f"{r['id']:>6}  {r['at']}  {r['action']:<16}  {r['subject']:<12} "
+                      f"{r['detail']}  h:{r.get('prev_hash','')[:10]}")
         return 0
 
     if args.command == "voice":
@@ -205,6 +219,11 @@ def main(argv=None) -> int:
             print(f"watchers: {', '.join(w['name'] + '(T' + str(w['tier']) + ')' for w in out['watchers'])}")
             print(f"voice   : tts={out['voice']['tts']} asr={out['voice']['asr_engine'] or 'none'}"
                   " wake_word=off always_on=off")
+            print(f"session : {out['session']['asks']} asks, {out['session']['blocks']} blocks "
+                  f"(rate {out['session']['block_rate']:.1%}, "
+                  f"{'flagged >30%' if out['session']['over_blocking'] else 'within bound'})")
+            print("constraints: VISION = accuracy marker (labels responses, not addressable) · "
+                  "ULTRON = validation constraint (gates every response, not disableable)")
             print(f"\n{HONESTY}")
         return 0
 

@@ -1,8 +1,9 @@
 """VISION — accuracy marker. Labels every shaped response grounded | partial | ungrounded | cold.
 
 VISION never modifies the response (FR-4.8) and never speaks in persona (FR-4.9).
-Per Premortem FM3, an empty/cold memory produces the distinct label `cold` rather
-than a misleading `ungrounded`.
+Per Premortem FM3, memory below the cold threshold (default 20 claims) suppresses
+the accuracy label entirely: the response carries `cold` / [memory: cold], never
+a misleading `ungrounded`.
 """
 
 from __future__ import annotations
@@ -98,10 +99,12 @@ def mark(response_text: str, recalled_claims: List[dict],
         resp_terms, {cl["claim_id"]: set(_tokenize(cl["text"])) for cl in recalled_claims}
     )
 
-    if cold and not recalled_claims:
+    # FM3: below the claim-count threshold, no misleading accuracy label is shown —
+    # not even `ungrounded`. The user sees [memory: cold] until the graph is warm.
+    if cold:
         label = "cold"
         confidence = 0.0
-        notes.append("fresh memory: no claims to ground against (FM3)")
+        notes.append("fresh memory: fewer than threshold claims; marks suppressed (FM3)")
     elif grounding < 0.3 or contradiction:
         label = "ungrounded"
         confidence = round(max(0.0, grounding), 4)

@@ -27,6 +27,10 @@ Speaking profiles (`JARVIS`, `FRIDAY`, `KAREN`) accept user queries. `VISION` an
 
 Samvit makes no claim of errorless output, sentience, consciousness, always-on listening, multi-user support, clinical validity, or OpenAI endorsement. These are constraints, not bugs — see the Design Constraints (C1–C12) in the SRS.
 
+## Privacy
+
+Your memory graph, persona, and audit log stay **on-device** (a local SQLite file); nothing is exported or transmitted without an explicit command. Qualification: when the *local-friendly* provider is unavailable, only a small bounded set of `recalled` memory snippets (default 5, `llm.max_memory_snippets`) is sent alongside your message to the selected LLM provider to help generate a response. The full memory graph, API keys, config, and shell history are never sent. Full detail in SRS §7.3.
+
 ## Quick Start
 
 ```bash
@@ -37,7 +41,9 @@ python3 -m samvit persona use friday
 python3 -m samvit status
 ```
 
-Requires Python 3.9+, **standard library only**, one SQLite file per brain, minimal ~256 MB.
+Requires Python 3.9+, **standard library only — except optional voice input**, one SQLite file per brain, minimal ~256 MB.
+
+Voice output uses OS-native TTS (a system binary such as `espeak-ng`, `say`, or `spd-say`). Voice *input* (push-to-talk) is **optional** and requires the external `whisper`/`whisper.cpp` binary — it is not part of the base install. Every core feature (memory, persona, guardrails, VISION, ULTRON, tools, watchers, TTY text mode) runs on the standard library alone.
 
 ## Docs
 
