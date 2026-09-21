@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "samvit"
+version = "1.0.0"
+description = "Samvit — local-first personal AI with VISION accuracy marker and ULTRON error validation constraint"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Sai Karun Nandipati", email = "saikarun085@gmail.com" }]
+keywords = ["local-first", "personal-ai", "guardrails", "memory-graph", "sqlite", "accuracy-marker"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+]
+
+[project.scripts]
+samvit = "samvit.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["samvit*"]
