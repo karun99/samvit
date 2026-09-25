@@ -11,6 +11,20 @@ Samvit is Sanskrit for *"consciousness"* / *"knowing together"* — *sam* (toget
 
 ---
 
+## Statement of need
+
+Personal AI chats are opaque about trust: they will fluently generate a
+fabricated answer, and the user has no in-band signal for whether a reply is
+grounded recollection or hallucination. Privacy often requires shipping
+private data to a remote service. Samvit addresses both directly — it runs
+entirely locally with standard-library-only dependencies, labels every
+response `grounded | partial | ungrounded` (VISION), and gates every response
+through a fixed 14-check error-validation constraint (ULTRON). The exact
+behavior is locked by an 80-test suite that runs with zero third-party
+installs, so the claims are reproducible, not marketing.
+
+---
+
 ## Profiles
 
 | Profile | Default address | Voice |
