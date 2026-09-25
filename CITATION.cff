@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Samvit"
+abstract: "Local-first personal AI with one shared memory graph, five named profiles, a VISION accuracy marker, and an ULTRON 14-check error-validation constraint. Python 3.9+, standard library only."
+authors:
+  - family-names: Nandipati
+    given-names: Sai Karun
+    orcid: https://orcid.org/0009-0007-9218-9750
+    affiliation: "Department of Data Science and Artificial Intelligence, PB Siddhartha College of Arts and Science"
+keywords:
+  - personal AI
+  - memory graph
+  - guardrails
+  - local-first
+  - sqlite
+license: MIT
+date-released: "2026-09-25"
+version: "1.0.0"
+repository-code: "https://github.com/karun99/samvit"

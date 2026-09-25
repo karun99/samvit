@@ -25,6 +25,14 @@ installs, so the claims are reproducible, not marketing.
 
 ---
 
+## AI usage disclosure
+
+Code and documentation were drafted with generative-AI assistance and reviewed
+by the human maintainer, who made the design decisions. This disclosure is kept
+in line with the JOSS AI usage policy.
+
+---
+
 ## Profiles
 
 | Profile | Default address | Voice |
