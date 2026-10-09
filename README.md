@@ -67,11 +67,27 @@ Requires Python 3.9+, **standard library only — except optional voice input**,
 
 Voice output uses OS-native TTS (a system binary such as `espeak-ng`, `say`, or `spd-say`). Voice *input* (push-to-talk) is **optional** and requires the external `whisper`/`whisper.cpp` binary — it is not part of the base install. Every core feature (memory, persona, guardrails, VISION, ULTRON, tools, watchers, TTY text mode) runs on the standard library alone.
 
+## MCP server
+
+Samvit ships a dependency-free [Model Context Protocol](https://modelcontextprotocol.io)
+server so agentic clients (Claude Desktop, opencode, Cursor, VS Code, ...) can
+drive its memory graph, personas, tools, and validation layers directly:
+
+```bash
+python3 mcp-server/server.py          # stdio JSON-RPC server
+python3 -m unittest discover -s tests -p "test_mcp_server.py" -v
+```
+
+A ready-to-use [`.mcp.json`](.mcp.json) is included. See
+**[docs/MCP.md](docs/MCP.md)** and **[mcp-server/README.md](mcp-server/README.md)**
+for the 15 exposed tools and client setup.
+
 ## Docs
 
 - **[docs/SRS.md](docs/SRS.md)** — Full ISO/IEC/IEEE 29148:2018-style Software Requirements Specification (SRS-SAMVIT-1.0), including the complete premortem analysis and the ten failure modes.
 - **[docs/IF_I_STOP.md](docs/IF_I_STOP.md)** — Handoff instructions per Premortem Failure Mode 10.
 - **[docs/NOTICE.md](docs/NOTICE.md)** — External reference relationships (no endorsement implied).
+- **[docs/MCP.md](docs/MCP.md)** — Model Context Protocol server: tools, transport, and client setup.
 
 ## License
 
